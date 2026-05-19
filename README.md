@@ -114,6 +114,9 @@ http://localhost:3000
 
 ---
 
+## UI Screenshot
+![UI](screenshots/UI_Screenshot.png)
+
 ## What I learned building this
 
 The hardest part wasn't the queue logic — it was startup ordering. Workers connecting to RabbitMQ before the API had declared the exchanges caused silent failures. The fix was making each service declare its own exchanges and queues idempotently on startup. RabbitMQ's `durable=True` declarations are idempotent, so multiple services declaring the same queue is safe.
