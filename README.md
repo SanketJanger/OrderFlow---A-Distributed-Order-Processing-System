@@ -11,6 +11,21 @@ The system processes orders through two phases: a synchronous critical path (val
 ![Architecture](screenshots/Architecture_Diagram.drawio.png)
 
 ## How it works
+
+```
+User places order
+      ↓
+FastAPI → PostgreSQL (order created) → RabbitMQ sync queue
+      ↓
+Sync Worker: validate cart → reserve inventory → process payment
+      ↓
+RabbitMQ async queue (4 jobs fired in parallel)
+      ↓
+Async Worker: email + invoice + warehouse + analytics
+      ↓
+Redis pub/sub → WebSocket → browser (live status updates)
+```
+
 **FastAPI** (`services/api/main.py`) handles REST endpoints and WebSocket connections. On startup it declares all RabbitMQ exchanges and queues with dead letter routing configured. Orders are created in PostgreSQL and immediately published to the sync queue.
 
 **Sync Worker** (`services/workers/sync_worker.py`) processes one job at a time with `prefetch_count=1`. Each job goes through three sequential steps — cart validation, inventory reservation, payment processing. Uses PostgreSQL row-level locking (`SELECT FOR UPDATE`) during inventory reservation to prevent race conditions when two orders compete for the last item.
