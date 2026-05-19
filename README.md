@@ -6,6 +6,10 @@ The system processes orders through two phases: a synchronous critical path (val
 
 ---
 
+## Architecture
+
+![Architecture](screenshots/Architecture_Diagram.drawio.png)
+
 ## How it works
 **FastAPI** (`services/api/main.py`) handles REST endpoints and WebSocket connections. On startup it declares all RabbitMQ exchanges and queues with dead letter routing configured. Orders are created in PostgreSQL and immediately published to the sync queue.
 
