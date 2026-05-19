@@ -1,0 +1,99 @@
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: orderflow
+      POSTGRES_USER: orderflow
+      POSTGRES_PASSWORD: orderflow123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/migrations/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orderflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    environment:
+      RABBITMQ_DEFAULT_USER: orderflow
+      RABBITMQ_DEFAULT_PASS: orderflow123
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: ./services/api
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://orderflow:orderflow123@postgres:5432/orderflow
+      RABBITMQ_URL: amqp://orderflow:orderflow123@rabbitmq:5672/
+      REDIS_URL: redis://redis:6379
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./services/api:/app
+
+  sync_worker:
+    build: ./services/workers
+    command: python sync_worker.py
+    environment:
+      DATABASE_URL: postgresql://orderflow:orderflow123@postgres:5432/orderflow
+      RABBITMQ_URL: amqp://orderflow:orderflow123@rabbitmq:5672/
+      REDIS_URL: redis://redis:6379
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./services/workers:/app
+
+  async_worker:
+    build: ./services/workers
+    command: python async_worker.py
+    environment:
+      DATABASE_URL: postgresql://orderflow:orderflow123@postgres:5432/orderflow
+      RABBITMQ_URL: amqp://orderflow:orderflow123@rabbitmq:5672/
+      REDIS_URL: redis://redis:6379
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./services/workers:/app
+
+volumes:
+  postgres_data:
