@@ -1,6 +1,6 @@
 # OrderFlow — Distributed Order Processing System
 
-I built this to understand how real e-commerce backends handle the gap between "user clicks buy" and "order is confirmed." Not the frontend part — the infrastructure underneath it. The part that answers "what happens when payment fails?" and "how do you make sure two people can't buy the last item at the same time?"
+I built this to understand how real e-commerce backends handle the gap between "user clicks buy" and "order is confirmed." Not the frontend part but the infrastructure underneath it. The part that answers "what happens when payment fails?" and "how do you make sure two people can't buy the last item at the same time?"
 
 The system processes orders through two phases: a synchronous critical path (validate cart → reserve inventory → process payment) and an asynchronous background phase (email confirmation, invoice generation, warehouse notification, analytics update). Both phases run as separate workers consuming from RabbitMQ queues.
 
@@ -161,6 +161,9 @@ Scaling from 1 to 4 workers gave a 2.55x to 2.6x throughput improvement, sub-lin
 At 1,000 concurrent orders with a fixed 4-worker pool, average wait time grew to 6.3 minutes since throughput stayed roughly constant while queue depth grew. This exposed the next scaling problem: fixed worker counts don't adapt to bursty load, which led directly to the Kubernetes autoscaling work below.
 
 ### Kubernetes deployment and autoscaling
+## Updated Architectural Diagram: 
+![k8 Architecture](screenshots/orderflow_k8s_architecture.png)
+
 
 Deployed the full 6-service architecture (PostgreSQL, Redis, RabbitMQ, FastAPI, sync worker, async worker) to Kubernetes via Minikube, with a HorizontalPodAutoscaler configured on the sync worker.
 k8s/
