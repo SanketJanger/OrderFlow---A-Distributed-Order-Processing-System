@@ -143,3 +143,42 @@ Measured under 10 concurrent orders on local Docker Compose setup:
 | Payment retries | 2 auto-recovered |
 | DLQ messages | 0 |
 | Async jobs fired | 80 (4 per order, parallel) |
+
+## Load Testing and Scaling
+
+### Worker scaling test (Docker Compose)
+
+Scaled the sync worker pool from 1 to 4 replicas to measure throughput improvement under concurrent load.
+
+| Workers | Orders | Throughput | Notes |
+|---|---|---|---|
+| 1 | 50 | 0.51 orders/sec | Stock exhausted mid-test, 23/50 correctly rejected via row-level locking |
+| 4 | 100 | 1.31 orders/sec | 100% fulfillment, sufficient stock |
+| 4 | 1,000 | 1.32 orders/sec | 99.9% fulfillment (999/1000), sustained throughput confirms linear scaling |
+
+Scaling from 1 to 4 workers gave a 2.55x to 2.6x throughput improvement, sub-linear due to PostgreSQL connection pool contention and RabbitMQ overhead at higher concurrency.
+
+At 1,000 concurrent orders with a fixed 4-worker pool, average wait time grew to 6.3 minutes since throughput stayed roughly constant while queue depth grew. This exposed the next scaling problem: fixed worker counts don't adapt to bursty load, which led directly to the Kubernetes autoscaling work below.
+
+### Kubernetes deployment and autoscaling
+
+Deployed the full 6-service architecture (PostgreSQL, Redis, RabbitMQ, FastAPI, sync worker, async worker) to Kubernetes via Minikube, with a HorizontalPodAutoscaler configured on the sync worker.
+**Finding:** under a load test of 200 concurrent orders, CPU usage on the sync worker stayed under 5%, never approaching the 50% HPA scaling threshold, despite the worker actively processing the full queue (99% fulfillment, 198/200 orders, 2 correctly routed to DLQ after exhausting retries).
+
+This confirmed OrderFlow's sync worker is **I/O-bound, not CPU-bound** — the majority of processing time is spent waiting on PostgreSQL queries and RabbitMQ acknowledgments rather than computing. CPU-based autoscaling is the wrong signal for this workload. The architecturally correct approach is **queue-depth-based autoscaling** (e.g. KEDA watching RabbitMQ queue length), which scales workers based on actual backlog rather than a metric that never moves under this kind of load.
+
+### Running on Kubernetes locally
+
+```bash
+minikube start --cpus=4 --memory=8192 --driver=docker
+eval $(minikube docker-env)
+docker build -t orderflow-api:latest ./services/api
+docker build -t orderflow-worker:latest ./services/workers
+
+kubectl apply -f k8s/postgres.yaml -f k8s/redis.yaml -f k8s/rabbitmq.yaml
+kubectl apply -f k8s/api.yaml -f k8s/sync-worker.yaml -f k8s/async-worker.yaml
+kubectl apply -f k8s/hpa.yaml
+
+minikube addons enable metrics-server
+minikube service api --url
+```
