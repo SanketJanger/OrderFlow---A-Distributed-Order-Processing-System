@@ -142,7 +142,7 @@ export default function Home() {
             <span style={{ color: "#fff", fontSize: 13, fontWeight: 600 }}>O</span>
           </div>
           <span style={{ fontWeight: 600, fontSize: 15, color: "#1a1a2e", letterSpacing: "-0.01em" }}>
-            OrderFlow
+            OrderFlow - A Distributed Order Processing System
           </span>
           <span style={{
             marginLeft: 4, fontSize: 10, fontWeight: 500,
@@ -150,24 +150,8 @@ export default function Home() {
             padding: "1px 6px", borderRadius: 4,
             fontFamily: "JetBrains Mono, monospace",
           }}>
-            v1.0
           </span>
         </div>
-
-        {health && (
-          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-            {[
-              { label: "Postgres", ok: health.postgres === "reachable" },
-              { label: "Redis",    ok: health.redis    === "reachable" },
-              { label: "RabbitMQ", ok: health.rabbitmq === "reachable" },
-            ].map(s => (
-              <div key={s.label} style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                <ServiceDot ok={s.ok} />
-                <span style={{ fontSize: 12, color: "#868e96" }}>{s.label}</span>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
 
       <div style={{ padding: "24px 32px", maxWidth: 1300, margin: "0 auto" }}>

@@ -5,3 +5,4 @@ node_modules/
 .next/
 *.egg-info/
 .DS_Store
+graphify-out/
