@@ -163,6 +163,22 @@ At 1,000 concurrent orders with a fixed 4-worker pool, average wait time grew to
 ### Kubernetes deployment and autoscaling
 
 Deployed the full 6-service architecture (PostgreSQL, Redis, RabbitMQ, FastAPI, sync worker, async worker) to Kubernetes via Minikube, with a HorizontalPodAutoscaler configured on the sync worker.
+k8s/
+
+├── postgres.yaml
+
+├── redis.yaml
+
+├── rabbitmq.yaml
+
+├── api.yaml
+
+├── sync-worker.yaml
+
+├── async-worker.yaml
+
+└── hpa.yaml
+
 **Finding:** under a load test of 200 concurrent orders, CPU usage on the sync worker stayed under 5%, never approaching the 50% HPA scaling threshold, despite the worker actively processing the full queue (99% fulfillment, 198/200 orders, 2 correctly routed to DLQ after exhausting retries).
 
 This confirmed OrderFlow's sync worker is **I/O-bound, not CPU-bound** — the majority of processing time is spent waiting on PostgreSQL queries and RabbitMQ acknowledgments rather than computing. CPU-based autoscaling is the wrong signal for this workload. The architecturally correct approach is **queue-depth-based autoscaling** (e.g. KEDA watching RabbitMQ queue length), which scales workers based on actual backlog rather than a metric that never moves under this kind of load.
