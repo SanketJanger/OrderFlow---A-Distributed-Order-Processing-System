@@ -198,6 +198,22 @@ The result: the test effectively ran on 1 worker for the remaining ~46 minutes i
 
 **This is the real lesson:** CPU-based autoscaling doesn't just fail to help I/O-bound systems, it can actively work against them, removing capacity exactly when a queue is backed up, because the metric it's watching never reflects the actual backlog. The correct fix is **queue-depth-based autoscaling** (e.g. KEDA watching RabbitMQ queue length directly), which scales on the metric that actually represents pending work, not a proxy that happens to stay flat under this kind of load.
 
+### The fix: setting a replica floor
+
+The root cause of the scale-down problem was `minReplicas: 1`, which gave HPA room to scale all the way down to a single worker whenever CPU looked idle, even when the workload genuinely needed more capacity. The fix was setting `minReplicas: 4` to match the actual provisioned capacity, combined with a longer `scaleDown.stabilizationWindowSeconds` (120s instead of 60s) to make scale-down decisions less reactive.
+
+Re-running the exact same 1,000-order test with this fix in place:
+
+| Configuration | Throughput | Fulfillment | Max time |
+|---|---|---|---|
+| Docker Compose, 4 workers (no orchestration) | 1.324 orders/sec | 99.9% | 12.6 min |
+| Kubernetes, HPA `minReplicas=1` (scaled down mid-test) | 0.359 orders/sec | 99.5% | 46.2 min |
+| Kubernetes, HPA `minReplicas=4` (floored, fixed) | 1.366 orders/sec | 99.7% | 12.2 min |
+
+With the floor in place, `kubectl describe hpa` confirmed `4 current / 4 desired` throughout the entire test with zero scaling events, and the `ScalingLimited: True, Reason: TooFewReplicas` condition showed HPA *wanted* to scale down further but was correctly blocked. Performance matched Docker Compose almost exactly (103% as fast), proving Kubernetes itself added no meaningful overhead, the earlier slowdown was entirely caused by the unconstrained scale-down policy, not the orchestration layer.
+
+This is the difference between deploying a tool and understanding it: setting `minReplicas` without thinking about the workload's actual metric behavior is a common production mistake, and recovering from it required recognizing that CPU-based scaling decisions need a safety floor when the metric doesn't reliably reflect real load.
+
 ### Running on Kubernetes locally
 
 ```bash
