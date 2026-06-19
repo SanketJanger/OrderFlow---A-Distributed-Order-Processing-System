@@ -7,7 +7,7 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: sync-worker
-  minReplicas: 1
+  minReplicas: 4
   maxReplicas: 10
   metrics:
     - type: Resource
@@ -24,7 +24,7 @@ spec:
           value: 2
           periodSeconds: 15
     scaleDown:
-      stabilizationWindowSeconds: 60
+      stabilizationWindowSeconds: 120
       policies:
         - type: Pods
           value: 1
