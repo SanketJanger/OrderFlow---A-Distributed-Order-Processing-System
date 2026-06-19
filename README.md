@@ -184,7 +184,19 @@ k8s/
 
 **Finding:** under a load test of 200 concurrent orders, CPU usage on the sync worker stayed under 5%, never approaching the 50% HPA scaling threshold, despite the worker actively processing the full queue (99% fulfillment, 198/200 orders, 2 correctly routed to DLQ after exhausting retries).
 
-This confirmed OrderFlow's sync worker is **I/O-bound, not CPU-bound** — the majority of processing time is spent waiting on PostgreSQL queries and RabbitMQ acknowledgments rather than computing. CPU-based autoscaling is the wrong signal for this workload. The architecturally correct approach is **queue-depth-based autoscaling** (e.g. KEDA watching RabbitMQ queue length), which scales workers based on actual backlog rather than a metric that never moves under this kind of load.
+This confirmed OrderFlow's sync worker is **I/O-bound, not CPU-bound** — the majority of processing time is spent waiting on PostgreSQL queries and RabbitMQ acknowledgments rather than computing.
+
+**A more important finding came from a 1,000-order test.** I manually scaled the sync worker to 4 replicas and submitted 1,000 concurrent orders. Within the first 1-2 minutes, the HPA observed CPU usage was low (because the workload is I/O-bound, not idle) and concluded the system needed less capacity — it scaled the deployment from 4 replicas down to 3, then 2, then 1, all while 638+ orders sat queued waiting to be processed.
+Events:
+
+SuccessfulRescale  New size: 3; reason: All metrics below target
+
+SuccessfulRescale  New size: 2; reason: All metrics below target
+
+SuccessfulRescale  New size: 1; reason: All metrics below target
+The result: the test effectively ran on 1 worker for the remaining ~46 minutes instead of 4, producing 0.359 orders/sec, close to the single-worker baseline (0.51 orders/sec) rather than the 4-worker baseline (1.32 orders/sec) measured under Docker Compose.
+
+**This is the real lesson:** CPU-based autoscaling doesn't just fail to help I/O-bound systems, it can actively work against them, removing capacity exactly when a queue is backed up, because the metric it's watching never reflects the actual backlog. The correct fix is **queue-depth-based autoscaling** (e.g. KEDA watching RabbitMQ queue length directly), which scales on the metric that actually represents pending work, not a proxy that happens to stay flat under this kind of load.
 
 ### Running on Kubernetes locally
 
