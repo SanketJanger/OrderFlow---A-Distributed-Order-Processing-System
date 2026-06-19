@@ -168,12 +168,19 @@ At 1,000 concurrent orders with a fixed 4-worker pool, average wait time grew to
 Deployed the full 6-service architecture (PostgreSQL, Redis, RabbitMQ, FastAPI, sync worker, async worker) to Kubernetes via Minikube, with a HorizontalPodAutoscaler configured on the sync worker.
 
 k8s/
+
 ├── postgres.yaml
+
 ├── redis.yaml
+
 ├── rabbitmq.yaml
+
 ├── api.yaml
+
 ├── sync-worker.yaml
+
 ├── async-worker.yaml
+
 └── hpa.yaml
 
 Under a load test of 200 concurrent orders, CPU usage on the sync worker stayed under 5%, never approaching the 50% HPA threshold, despite the worker actively processing the full queue (99% fulfillment, 198/200 orders, 2 correctly routed to DLQ after exhausting retries). The sync worker is I/O-bound, not CPU-bound, most of its time is spent waiting on PostgreSQL queries and RabbitMQ acknowledgments, not computing.
