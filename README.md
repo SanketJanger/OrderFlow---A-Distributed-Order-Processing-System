@@ -166,53 +166,39 @@ At 1,000 concurrent orders with a fixed 4-worker pool, average wait time grew to
 
 
 Deployed the full 6-service architecture (PostgreSQL, Redis, RabbitMQ, FastAPI, sync worker, async worker) to Kubernetes via Minikube, with a HorizontalPodAutoscaler configured on the sync worker.
+
 k8s/
-
 ├── postgres.yaml
-
 ├── redis.yaml
-
 ├── rabbitmq.yaml
-
 ├── api.yaml
-
 ├── sync-worker.yaml
-
 ├── async-worker.yaml
-
 └── hpa.yaml
 
-**Finding:** under a load test of 200 concurrent orders, CPU usage on the sync worker stayed under 5%, never approaching the 50% HPA scaling threshold, despite the worker actively processing the full queue (99% fulfillment, 198/200 orders, 2 correctly routed to DLQ after exhausting retries).
+Under a load test of 200 concurrent orders, CPU usage on the sync worker stayed under 5%, never approaching the 50% HPA threshold, despite the worker actively processing the full queue (99% fulfillment, 198/200 orders, 2 correctly routed to DLQ after exhausting retries). The sync worker is I/O-bound, not CPU-bound, most of its time is spent waiting on PostgreSQL queries and RabbitMQ acknowledgments, not computing.
 
-This confirmed OrderFlow's sync worker is **I/O-bound, not CPU-bound** — the majority of processing time is spent waiting on PostgreSQL queries and RabbitMQ acknowledgments rather than computing.
-
-**A more important finding came from a 1,000-order test.** I manually scaled the sync worker to 4 replicas and submitted 1,000 concurrent orders. Within the first 1-2 minutes, the HPA observed CPU usage was low (because the workload is I/O-bound, not idle) and concluded the system needed less capacity — it scaled the deployment from 4 replicas down to 3, then 2, then 1, all while 638+ orders sat queued waiting to be processed.
-Events:
+A 1,000-order test exposed a more serious problem. I manually scaled the sync worker to 4 replicas and submitted 1,000 concurrent orders. Within the first 1-2 minutes, the HPA saw low CPU usage and scaled the deployment down, 4 replicas to 3, then 2, then 1, while 638+ orders were still sitting in the queue.
 
 SuccessfulRescale  New size: 3; reason: All metrics below target
-
 SuccessfulRescale  New size: 2; reason: All metrics below target
-
 SuccessfulRescale  New size: 1; reason: All metrics below target
-The result: the test effectively ran on 1 worker for the remaining ~46 minutes instead of 4, producing 0.359 orders/sec, close to the single-worker baseline (0.51 orders/sec) rather than the 4-worker baseline (1.32 orders/sec) measured under Docker Compose.
 
-**This is the real lesson:** CPU-based autoscaling doesn't just fail to help I/O-bound systems, it can actively work against them, removing capacity exactly when a queue is backed up, because the metric it's watching never reflects the actual backlog. The correct fix is **queue-depth-based autoscaling** (e.g. KEDA watching RabbitMQ queue length directly), which scales on the metric that actually represents pending work, not a proxy that happens to stay flat under this kind of load.
+The test effectively ran on 1 worker for the remaining ~46 minutes instead of 4, producing 0.359 orders/sec, close to the single-worker baseline (0.51 orders/sec) rather than the 4-worker baseline (1.32 orders/sec) from Docker Compose. CPU-based autoscaling didn't just fail to help here, it actively removed capacity while the queue was backed up, because CPU never reflected the actual backlog. The correct fix for this kind of workload is queue-depth-based autoscaling, KEDA watching RabbitMQ queue length directly, which I attempted but hit a networking issue in Minikube that I didn't fully resolve.
 
-### The fix: setting a replica floor
+### Fixing the scale-down problem
 
-The root cause of the scale-down problem was `minReplicas: 1`, which gave HPA room to scale all the way down to a single worker whenever CPU looked idle, even when the workload genuinely needed more capacity. The fix was setting `minReplicas: 4` to match the actual provisioned capacity, combined with a longer `scaleDown.stabilizationWindowSeconds` (120s instead of 60s) to make scale-down decisions less reactive.
+The root cause was `minReplicas: 1`, which let HPA scale all the way down to a single worker whenever CPU looked idle. I set `minReplicas: 4` to match the actual provisioned capacity, and increased `scaleDown.stabilizationWindowSeconds` from 60 to 120 to make scale-down less reactive.
 
-Re-running the exact same 1,000-order test with this fix in place:
+Re-running the same 1,000-order test:
 
 | Configuration | Throughput | Fulfillment | Max time |
 |---|---|---|---|
-| Docker Compose, 4 workers (no orchestration) | 1.324 orders/sec | 99.9% | 12.6 min |
-| Kubernetes, HPA `minReplicas=1` (scaled down mid-test) | 0.359 orders/sec | 99.5% | 46.2 min |
-| Kubernetes, HPA `minReplicas=4` (floored, fixed) | 1.366 orders/sec | 99.7% | 12.2 min |
+| Docker Compose, 4 workers | 1.324 orders/sec | 99.9% | 12.6 min |
+| Kubernetes, `minReplicas=1` (scaled down mid-test) | 0.359 orders/sec | 99.5% | 46.2 min |
+| Kubernetes, `minReplicas=4` (fixed) | 1.366 orders/sec | 99.7% | 12.2 min |
 
-With the floor in place, `kubectl describe hpa` confirmed `4 current / 4 desired` throughout the entire test with zero scaling events, and the `ScalingLimited: True, Reason: TooFewReplicas` condition showed HPA *wanted* to scale down further but was correctly blocked. Performance matched Docker Compose almost exactly (103% as fast), proving Kubernetes itself added no meaningful overhead, the earlier slowdown was entirely caused by the unconstrained scale-down policy, not the orchestration layer.
-
-This is the difference between deploying a tool and understanding it: setting `minReplicas` without thinking about the workload's actual metric behavior is a common production mistake, and recovering from it required recognizing that CPU-based scaling decisions need a safety floor when the metric doesn't reliably reflect real load.
+With the floor in place, `kubectl describe hpa` showed `4 current / 4 desired` for the entire test with zero scaling events, and a `ScalingLimited: True, Reason: TooFewReplicas` condition confirming HPA wanted to scale down further but was blocked. Throughput matched Docker Compose almost exactly, the earlier slowdown was the unconstrained scale-down policy, not Kubernetes itself.
 
 ### Running on Kubernetes locally
 
@@ -229,3 +215,13 @@ kubectl apply -f k8s/hpa.yaml
 minikube addons enable metrics-server
 minikube service api --url
 ```
+
+## What I learned building this
+
+The hardest part wasn't the queue logic, it was startup ordering. Workers connecting to RabbitMQ before the API had declared the exchanges caused silent failures. The fix was making each service declare its own exchanges and queues on startup instead of relying on the API to do it first. RabbitMQ's `durable=True` declarations are idempotent, so multiple services declaring the same queue is fine.
+
+`prefetch_count` mattered more than I expected. Without it, RabbitMQ pushes all queued messages to the first available worker, which defeats the point of running multiple workers. Setting it to 1 on the sync worker forces fair distribution, each worker takes one job, finishes it, then takes the next.
+
+The Redis pub/sub plus WebSocket pattern turned out simpler than I thought it would. Every status change publishes to `order:{id}` in Redis, the WebSocket endpoint subscribes to that channel and forwards messages straight to the browser. No polling.
+EOF
+echo "File created at /tmp/k8s_section.md"
