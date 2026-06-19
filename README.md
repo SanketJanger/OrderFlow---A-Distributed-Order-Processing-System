@@ -115,13 +115,6 @@ http://localhost:3000
 ---
 
 ## UI Screenshot
-![UI](screenshots/UI_Screenshot.png)
-
-## What I learned building this
-
-The hardest part wasn't the queue logic — it was startup ordering. Workers connecting to RabbitMQ before the API had declared the exchanges caused silent failures. The fix was making each service declare its own exchanges and queues idempotently on startup. RabbitMQ's `durable=True` declarations are idempotent, so multiple services declaring the same queue is safe.
-
-`prefetch_count` matters more than I expected. Without it, RabbitMQ pushes all queued messages to the first available worker, which defeats the purpose of having multiple workers. Setting it to 1 on the sync worker ensures fair distribution — each worker takes one job, processes it, then takes the next.
 
 The WebSocket + Redis pub/sub pattern is clean. Every status change publishes to `order:{id}` in Redis. The WebSocket endpoint subscribes to that channel and forwards messages to the browser. The frontend never polls — it just listens.
 
